@@ -7,17 +7,19 @@ import struct
 def to_hex(msg: bytes) -> str:
     return ' '.join(format(x, '02x') for x in msg)
 
+
 def print_hex(msg: bytes):
     print(to_hex(msg))
 
 
-def aura_read(ser: serial.Serial) -> bytes:
+def aura_read(ser: serial.Serial) -> (bytes, bytes):
     resp_head = ser.read(20)
-    data_size = int.from_bytes(resp_head[18:20], "little")
+    name, counter, uid_src, uid_dst, func, data_size = struct.unpack(
+        '4sI4s4sHH', resp_head)
     crc_size = 2
     resp_body = ser.read(data_size)
     resp_crc = ser.read(crc_size)
-    return resp_body
+    return (uid_src, resp_body)
 
 
 def aura_parse_chunks(data: bytes):
@@ -33,6 +35,23 @@ def aura_parse_chunks(data: bytes):
         start = start + size
         if size == 0:
             return
+
+
+def aura_handle_cmd_get_access(
+        counter: int, handle_uid: bytes, offset: int, count: int) -> bytes:
+    chunk = struct.pack('BBHBB', 0x0B, 0x07, 2, offset, count)
+    size = len(chunk)
+    main_uid = bytes([0x11, 0x22, 0x33, 0x44])
+    header = struct.pack(
+        '4sI4s4sHH',
+        'AURA'.encode(),
+        counter,
+        main_uid,
+        handle_uid,
+        7,
+        size)
+    body = header + chunk
+    return body + crc16(body).to_bytes(2, "little")
 
 
 crc16 = crcmod.mkCrcFun(0x18005, rev=True, initCrc=0xFFFF, xorOut=0x0000)
@@ -94,29 +113,40 @@ cmd_write_exp.extend(crc16(cmd_write_exp).to_bytes(2, 'little'))
 
 ser = serial.Serial()
 ser.baudrate = 19200
-ser.port = 'COM9'
-ser.timeout = 1
+ser.port = 'COM20'
+ser.timeout = 2
 ser.open()
 
 ser.write(cmd_whoami)
 print('send:')
 print_hex(cmd_whoami)
 # whoami from temp sens
-resp = aura_read(ser)
+uid, resp = aura_read(ser)
 print('recv who:')
+print_hex(uid)
 print_hex(resp)
 
 # ser.write (cmd_whoami)
 # ser.write(crc16(cmd_whoami).to_bytes(2,'little'))
+# for i in range(10):
+#     ser.write(cmd_data)
+#     # whoami from temp sens
+#     a, resp = aura_read(ser)
+#     print()
+#     print('recv data:')
+#     print_hex(resp)
+#     aura_parse_chunks(resp)
+#     time.sleep(10)
+
 for i in range(10):
-    ser.write(cmd_data)
-    # whoami from temp sens
-    resp = aura_read(ser)
+    req = aura_handle_cmd_get_access(1, uid, 0, 1)
+    ser.write(req)
+    a, resp = aura_read(ser)
     print()
-    print('recv data:')
+    print(f'recv data {len(resp)}:')
     print_hex(resp)
     aura_parse_chunks(resp)
-    time.sleep(1)
+    time.sleep(10)
 
 
 # for i in range(2):
