@@ -1,7 +1,8 @@
 from enum import Enum
-from chunks import Chunk
+from chunks import Chunk, DataType
 from typing import NamedTuple
 from tools import print_with_indent, to_hex, add_indent
+import comm
 
 
 class Type(Enum):
@@ -33,7 +34,7 @@ class Sensor:
         raise NotImplementedError("Subclasses must implement parse_status()")
 
 
-class TempSensor(Sensor):
+class Temp(Sensor):
     class Id(Enum):
         TEMPERATURE = 0x04
 
@@ -55,8 +56,12 @@ class TempSensor(Sensor):
 
         self.status = self.Status(temp)
 
+    def request_temp_offset(self, offset: float) -> list[comm.Package]:
+        chunk = Chunk(self.Id.TEMPERATURE.value, DataType.F32, 4, offset)
+        return comm.request(self.uid, comm.Func.REQ_WRITE_DATA, chunk)
 
-class TempHumSensor(Sensor):
+
+class TempHum(Temp):
     class Id(Enum):
         TEMPERATURE = 0x04
         HUMIDITY = 0x05
@@ -82,8 +87,12 @@ class TempHumSensor(Sensor):
                     hum = ch.data
         self.status = self.Status(temp, hum)
 
+    def request_hum_offset(self, offset: float) -> list[comm.Package]:
+        chunk = Chunk(self.Id.HUMIDITY.value, DataType.F32, 4, offset)
+        return comm.request(self.uid, comm.Func.REQ_WRITE_DATA, chunk)
 
-class TempPressSensor(Sensor):
+
+class TempPress(Temp):
     class Id(Enum):
         TEMPERATURE = 0x04
         PRESSURE = 0x06
@@ -108,6 +117,10 @@ class TempPressSensor(Sensor):
                 case self.Id.PRESSURE:
                     press = ch.data
         self.status = self.Status(temp, press)
+
+    def request_press_offset(self, offset: float) -> list[comm.Package]:
+        chunk = Chunk(self.Id.PRESSURE.value, DataType.F32, 4, offset)
+        return comm.request(self.uid, comm.Func.REQ_WRITE_DATA, chunk)
 
 
 class Access(NamedTuple):
@@ -171,11 +184,11 @@ class Handle(Sensor):
 def create(uid: int, type: int):
     match type:
         case Type.LM75BD | Type.TMP112:
-            return TempSensor(uid)
+            return Temp(uid)
         case Type.SHT30 | Type.ZS05:
-            return TempHumSensor(uid)
+            return TempHum(uid)
         case Type.BMP180 | Type.LPS22HB:
-            return TempPressSensor(uid)
+            return TempPress(uid)
         case Type.HANDLE:
             return Handle(uid)
         # case Type.EXPANDER:

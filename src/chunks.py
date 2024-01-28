@@ -28,7 +28,7 @@ class DataType(Enum):
     CARD_RANGE = 21
 
 
-types_dict = {
+types_str = {
     DataType.NONE: "x",
     DataType.I8: "b",
     DataType.U8: "B",
@@ -66,17 +66,25 @@ class Chunk(NamedTuple):
 CHUNK_HEADER_SIZE = 4
 
 
-def parse(data: bytes) -> list[Chunk]:
+def unpack(data: bytes) -> list[Chunk]:
     start = 0
     chunks = []
     while start < len(data):
         id, type, size = struct.unpack_from("BBH", data, start)
         type = DataType(type)
         start += CHUNK_HEADER_SIZE
-        (val,) = struct.unpack_from(types_dict[type], data, start)
+        (val,) = struct.unpack_from(types_str[type], data, start)
         start += size
         chunk = Chunk(id, type, size, val)
         print("chunk:")
         print_with_indent(chunk)
         chunks.append(chunk)
     return chunks
+
+
+def pack(*chunks: Chunk) -> bytes:
+    res = bytes()
+    for chunk in chunks:
+        id, type, size, data = chunk
+        res += struct.pack("BBH" + types_str[type], id, type.value, size, data)
+    return res
