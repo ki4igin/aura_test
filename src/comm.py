@@ -10,7 +10,7 @@ from tools import to_hex
 import serial.tools.list_ports as list_ports
 
 
-__serial = Serial()
+__serial = Serial(baudrate=19200, timeout=0.5)
 __counter = 0
 __server_uid = 1234
 
@@ -122,9 +122,7 @@ def find_serials() -> None:
 
     for p in ports:
         print(f"finding devices on {p.name}...")
-        __serial = Serial(port=p.name, baudrate=19200, timeout=0.5)
-        __serial.close()
-        __serial.open()
+        __serial.port = p.name
         responses = request_whoami()
         if not responses or responses[0].header.protocol != "AURA":
             print(f"no AURA devices found on {p.name}")
@@ -132,7 +130,6 @@ def find_serials() -> None:
             print(f"AURA devices found on {p.name}")
             __serial.close()
             return
-        __serial.close()
 
 
 # def request_sensor_temp_offset(
