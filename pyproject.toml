@@ -11,6 +11,9 @@ pyserial = "^3.5"
 crcmod = "^1.7"
 
 
+[tool.poetry.group.dev.dependencies]
+ipython = "^8.20.0"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
