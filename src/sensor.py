@@ -1,8 +1,9 @@
 from enum import Enum
-from chunks import Chunk, DataType
+from chunks import Chunk, DataType, unpack
 from typing import NamedTuple
-from tools import print_with_indent, to_hex, add_indent
+from tools import add_indent
 import comm
+import log
 
 
 class Type(Enum):
@@ -27,8 +28,9 @@ class Sensor:
 
     def get_status(self, chunks: list[Chunk]):
         self.parse_status(chunks)
-        print(f"{self.NAME}:")
-        print_with_indent(self.status)
+        log.sensor(f"{self.NAME} {hex(self.uid)}:")
+        log.sensor(add_indent(self.status.__str__()))
+        log.sensor()
 
     def parse_status(self, chunks: list[Chunk]):
         raise NotImplementedError("Subclasses must implement parse_status()")
@@ -50,9 +52,9 @@ class Temp(Sensor):
     def parse_status(self, chunks: list[Chunk]):
         (temp,) = self.status
         for ch in chunks:
-            match ch.id:
+            match self.Id(ch.id):
                 case self.Id.TEMPERATURE:
-                    temp = ch.data
+                    (temp,) = ch.data
 
         self.status = self.Status(temp)
 
@@ -72,7 +74,7 @@ class TempHum(Temp):
 
         def __str__(self) -> str:
             temp, hum = self
-            return f"temp: {temp:04.1f} ℃; hum: {hum:02.0f} %"
+            return f"temp: {temp:04.1f} ℃ hum: {hum:02.0f} %"
 
     NAME = "Temperature and humidity sensor"
     status: Status = Status(0, 0)
@@ -80,12 +82,19 @@ class TempHum(Temp):
     def parse_status(self, chunks: list[Chunk]):
         temp, hum = self.status
         for ch in chunks:
-            match ch.id:
+            match self.Id(ch.id):
                 case self.Id.TEMPERATURE:
-                    temp = ch.data
+                    temp = ch.data[0]
                 case self.Id.HUMIDITY:
-                    hum = ch.data
+                    hum = ch.data[0]
         self.status = self.Status(temp, hum)
+
+    def request_temp_hum_offset(
+        self, temp_offset: float, hum_offset: float
+    ) -> list[comm.Package]:
+        chunk1 = Chunk(self.Id.TEMPERATURE.value, DataType.F32, 4, temp_offset)
+        chunk2 = Chunk(self.Id.HUMIDITY.value, DataType.F32, 4, hum_offset)
+        return comm.request(self.uid, comm.Func.REQ_WRITE_DATA, chunk1, chunk2)
 
     def request_hum_offset(self, offset: float) -> list[comm.Package]:
         chunk = Chunk(self.Id.HUMIDITY.value, DataType.F32, 4, offset)
@@ -103,7 +112,7 @@ class TempPress(Temp):
 
         def __str__(self) -> str:
             temp, press = self
-            return f"temp: {temp:04.1f} ℃; press: {press:06.0f} Па"
+            return f"temp: {temp:04.1f} ℃ press: {press:06.0f} Па"
 
     NAME = "Temperature and pressure sensor"
     status: Status = Status(0, 0)
@@ -111,26 +120,33 @@ class TempPress(Temp):
     def parse_status(self, chunks: list[Chunk]):
         temp, press = self.status
         for ch in chunks:
-            match ch.id:
+            match self.Id(ch.id):
                 case self.Id.TEMPERATURE:
-                    temp = ch.data
+                    (temp,) = ch.data
                 case self.Id.PRESSURE:
-                    press = ch.data
+                    (press,) = ch.data
         self.status = self.Status(temp, press)
 
     def request_press_offset(self, offset: float) -> list[comm.Package]:
         chunk = Chunk(self.Id.PRESSURE.value, DataType.F32, 4, offset)
         return comm.request(self.uid, comm.Func.REQ_WRITE_DATA, chunk)
 
+    def request_temp_press_offset(
+        self, temp_offset: float, press_offset: float
+    ) -> list[comm.Package]:
+        chunk1 = Chunk(self.Id.TEMPERATURE.value, DataType.F32, 4, temp_offset)
+        chunk2 = Chunk(self.Id.PRESSURE.value, DataType.F32, 4, press_offset)
+        return comm.request(self.uid, comm.Func.REQ_WRITE_DATA, chunk1, chunk2)
+
 
 class Access(NamedTuple):
-    card_uid: bytes
+    card_uid: int
     time: int
     is_valid: bool
 
     def __str__(self) -> str:
         return (
-            f"card : {to_hex(self.card_uid)}\n"
+            f"card : {hex(self.card_uid)}\n"
             f"time : {self.time} sec\n"
             f"valid: {self.is_valid}"
         )
@@ -163,26 +179,104 @@ class Handle(Sensor):
             )
 
     NAME = "Handle"
-    status: Status
+    status: Status = Status(False, Access(0, 0, False))
 
     def parse_status(self, chunks: list[Chunk]):
         (lock, (card_uid, time, is_valid)) = self.status
         for ch in chunks:
-            match ch.id:
+            match self.Id(ch.id):
                 case self.Id.STATUS_LOCKER:
-                    self.status_lock = ch.data == 0x00FF
+                    lock = ch.data == 0x00FF
                 case self.Id.CARD_UID:
-                    card_uid = ch.data
+                    (card_uid,) = ch.data
                 case self.Id.ACCESS_TIME:
-                    time = ch.data
+                    (time,) = ch.data
                 case self.Id.ACCESS_IS_VALID:
                     is_valid = ch.data == 0x00FF
+        self.status = self.Status(lock, Access(card_uid, time, is_valid))
 
-        self.last_access = self.Status(lock, Access(card_uid, time, is_valid))
+    def parse_read(self, chunks: list[Chunk]):
+        card_uid, time, is_valid = 0, 0, False
+        access_mask = 0
+        for ch in chunks:
+            match self.Id(ch.id):
+                case self.Id.CARD_UID:
+                    (card_uid,) = ch.data
+                    access_mask |= 0b001
+                case self.Id.ACCESS_TIME:
+                    (time,) = ch.data
+                    access_mask |= 0b010
+                case self.Id.ACCESS_IS_VALID:
+                    is_valid = ch.data[0] == 0x00FF
+                    access_mask |= 0b100
+                case self.Id.CARD_UID_ARR_READ:
+                    cards = ch.data
+                    log.sensor("saved cards:")
+                    if cards == 0:
+                        log.sensor("cards not found")
+                    elif isinstance(cards, int):
+                        log.sensor(add_indent(hex(cards)))
+                    else:
+                        for uid in ch.data:
+                            log.sensor(add_indent(hex(uid)))
+                    log.sensor("")
+
+            if access_mask == 0b111:
+                access_mask = 0
+                access = Access(card_uid, time, is_valid)
+                log.sensor(add_indent(access.__str__()))
+                log.sensor()
+
+    def request_access(self, offset: int, count: int) -> None:
+        chunk = Chunk(
+            self.Id.ACCESS_COUNT.value, DataType.CARD_RANGE, 2, (offset, count)
+        )
+        resp = comm.request(self.uid, comm.Func.REQ_READ_DATA, chunk)
+        if resp:
+            chunks = unpack(resp[0].data)
+            self.parse_read(chunks)
+
+    def request_saved_cards(self, offset: int, count: int) -> None:
+        chunk = Chunk(
+            self.Id.CARD_RANGE.value,
+            DataType.CARD_RANGE,
+            2,
+            (offset, count),
+        )
+        resp = comm.request(self.uid, comm.Func.REQ_READ_DATA, chunk)[0].data
+        chunks = unpack(resp)
+        self.parse_read(chunks)
+
+
+class Expander(Sensor):
+    class Id(Enum):
+        ERR = 3
+        STATUS_LOCKER = 4
+        CARD_UID = 5
+        CARD_UID_ARR_WRITE = 6
+        CARD_UID_ARR_READ = 7
+        CARD_RANGE = 8
+        CARD_SAVE_COUNT = 9
+        CARD_CLEAR = 10
+        ACCESS_COUNT = 11
+        ACCESS_IS_VALID = 12
+        ACCESS_TIME = 13
+
+    class Status(NamedTuple):
+        status: bool = True
+
+        def __str__(self) -> str:
+            return f"status: {'ok' if self.status else 'dis'}"
+
+    NAME = "Expander"
+    status: Status = Status(True)
+
+    def parse_status(self, chunks: list[Chunk]):
+        pass
 
 
 def create(uid: int, type: int):
-    match type:
+    match Type(type):
         case Type.LM75BD | Type.TMP112:
             return Temp(uid)
         case Type.SHT30 | Type.ZS05:
@@ -191,8 +285,8 @@ def create(uid: int, type: int):
             return TempPress(uid)
         case Type.HANDLE:
             return Handle(uid)
-        # case Type.EXPANDER:
-        #     return Expander(uid)
+        case Type.EXPANDER:
+            return Expander(uid)
         # case Type.LEAK:
         #     return Leak(uid)
         case _:

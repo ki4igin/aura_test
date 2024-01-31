@@ -1,5 +1,6 @@
 from serial import Serial
 import crcmod
+import log
 import struct
 import chunks
 
@@ -63,20 +64,31 @@ class PackageRaw(NamedTuple):
             f"crc : {to_hex(self.crc)}"
         )
 
+    def __len__(self) -> int:
+        return len(self.header) + len(self.data) + len(self.crc)
+
 
 def pack_read() -> Package | None:
     resp_header = __serial.read(20)
+
     if len(resp_header) != 20:
         return None
-    header = Header._make(struct.unpack("4sIIIHH", resp_header))
-    resp_data = __serial.read(header.data_size)
-    resp_crc = __serial.read(2)
+
+    protocol, counter, uid_src, uid_dst, func, data_size = struct.unpack(
+        "4sIIIHH", resp_header
+    )
+    resp_data = __serial.read(data_size + 2)
+    resp_crc = resp_data[-2:]
+    resp_data = resp_data[:-2]
     resp = PackageRaw(resp_header, resp_data, resp_crc)
-    print("pack resp:")
-    print(resp)
-    (crc,) = struct.unpack("H", resp_crc)
-    if crc16(resp_header + resp_data) != crc:
-        print("crc error")
+    (crc,) = struct.unpack("H", resp_crc) if len(resp_crc) == 2 else (0,)
+    is_valid = crc16(resp_header + resp_data) == crc
+    log.resp_pack(resp, is_valid)
+
+    if not is_valid:
+        return None
+
+    header = Header(protocol, counter, uid_src, uid_dst, Func(func), data_size)
     return Package(header, resp_data, crc)
 
 
@@ -93,7 +105,10 @@ def pack_create(uid_dst: int, func: Func, data: bytes = bytes()) -> bytes:
         len(data),
     )
     body = header + data
-    return body + struct.pack("H", crc16(body))
+    crc = struct.pack("H", crc16(body))
+    pack = PackageRaw(header, data, crc)
+    log.req_pack(pack)
+    return body + crc
 
 
 def request(uid: int, func: Func, *chs: chunks.Chunk | None) -> list[Package]:
@@ -114,49 +129,25 @@ def request_status() -> list[Package]:
     return request(0, Func.REQ_STATUS, None)
 
 
-def find_serials() -> None:
+def find_serials() -> bool:
     global __serial
     ports = list_ports.comports()
     if not ports:
         print("COM ports not found")
 
     for p in ports:
+        if p.name == "COM8":
+            continue
         print(f"finding devices on {p.name}...")
         __serial.port = p.name
         responses = request_whoami()
-        if not responses or responses[0].header.protocol != "AURA":
+        if not responses or responses[0].header.protocol != "AURA".encode():
             print(f"no AURA devices found on {p.name}")
         else:
             print(f"AURA devices found on {p.name}")
             __serial.close()
-            return
-
-
-# def request_sensor_temp_offset(
-#     ser: Serial,
-#     sensor: sensor.Temp,
-#     offset: float,
-# ) -> list[Package]:
-#     chunk = sensor.create_chunk_temp_offset(offset)
-#     return request(ser, uid, Func.REQ_WRITE_DATA, chunk)
-
-
-# def request_sensor_hum_offset(
-#     ser: Serial,
-#     sensor: sensor.TempHum,
-#     offset: float,
-# ) -> list[Package]:
-#     chunk = sensor.create_chunk_hum_offset(offset)
-#     return request(ser, uid, Func.REQ_WRITE_DATA, chunk)
-
-
-# def request_sensor_press_offset(
-#     ser: Serial,
-#     sensor: sensor.TempPress,
-#     offset: float,
-# ) -> list[Package]:
-#     chunk = sensor.create_chunk_press_offset(offset)
-#     return request(ser, uid, Func.REQ_WRITE_DATA, chunk)
+            return True
+    return False
 
 
 def get_responses() -> list[Package]:

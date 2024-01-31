@@ -1,7 +1,7 @@
 import struct
+import log
 from enum import Enum
 from typing import NamedTuple, Any
-from tools import print_with_indent
 
 
 class DataType(Enum):
@@ -28,19 +28,31 @@ class DataType(Enum):
     CARD_RANGE = 21
 
 
-types_str = {
-    DataType.NONE: "x",
-    DataType.I8: "b",
-    DataType.U8: "B",
-    DataType.I16: "h",
-    DataType.U16: "H",
-    DataType.I32: "i",
-    DataType.U32: "I",
-    DataType.F32: "f",
-    DataType.f64: "d",
-    DataType.STR: "s",
-    DataType.CARD_UID: "8B",
-}
+def type2format(type: DataType, size: int = 0) -> str:
+    type_mapping = {
+        DataType.NONE: "x",
+        DataType.I8: "b",
+        DataType.U8: "B",
+        DataType.I16: "h",
+        DataType.U16: "H",
+        DataType.I32: "i",
+        DataType.U32: "I",
+        DataType.F32: "f",
+        DataType.f64: "d",
+        DataType.STR: "s",
+        DataType.I8_ARR: f"{size}b",
+        DataType.U8_ARR: f"{size}B",
+        DataType.I16_ARR: f"{size // 2}h",
+        DataType.U16_ARR: f"{size // 2}H",
+        DataType.I32_ARR: f"{size // 4}i",
+        DataType.U32_ARR: f"{size // 4}I",
+        DataType.F32_ARR: f"{size // 4}f",
+        DataType.f64_ARR: f"{size // 8}d",
+        DataType.CARD_UID: "Q",
+        DataType.CARD_UID_ARR: f"{size // 8}Q",
+        DataType.CARD_RANGE: "BB",
+    }
+    return type_mapping.get(type, "") if size != 0 else ""
 
 
 class Id(Enum):
@@ -52,7 +64,7 @@ class Chunk(NamedTuple):
     id: int
     type: DataType
     data_size: int
-    data: Any
+    data: tuple[Any, ...] | Any
 
     def __str__(self) -> str:
         return (
@@ -63,21 +75,18 @@ class Chunk(NamedTuple):
         )
 
 
-CHUNK_HEADER_SIZE = 4
-
-
 def unpack(data: bytes) -> list[Chunk]:
+    CHUNK_HEADER_SIZE = 4
     start = 0
     chunks = []
     while start < len(data):
         id, type, size = struct.unpack_from("BBH", data, start)
         type = DataType(type)
         start += CHUNK_HEADER_SIZE
-        (val,) = struct.unpack_from(types_str[type], data, start)
+        val = struct.unpack_from(type2format(type, size), data, start)
         start += size
         chunk = Chunk(id, type, size, val)
-        print("chunk:")
-        print_with_indent(chunk)
+        log.resp_chunk(chunk)
         chunks.append(chunk)
     return chunks
 
@@ -85,6 +94,9 @@ def unpack(data: bytes) -> list[Chunk]:
 def pack(*chunks: Chunk) -> bytes:
     res = bytes()
     for chunk in chunks:
+        log.req_chunk(chunk)
         id, type, size, data = chunk
-        res += struct.pack("BBH" + types_str[type], id, type.value, size, data)
+        format = "BBH" + type2format(type, size)
+        data = data if isinstance(data, (list, tuple)) else (data,)
+        res += struct.pack(format, id, type.value, size, *data)
     return res
