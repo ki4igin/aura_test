@@ -155,16 +155,17 @@ class Access(NamedTuple):
 class Handle(Sensor):
     class Id(Enum):
         ERR = 3
+
         STATUS_LOCKER = 4
-        CARD_UID = 5
-        CARD_UID_ARR_WRITE = 6
-        CARD_UID_ARR_READ = 7
-        CARD_RANGE = 8
-        CARD_SAVE_COUNT = 9
-        CARD_CLEAR = 10
-        ACCESS_COUNT = 11
-        ACCESS_IS_VALID = 12
-        ACCESS_TIME = 13
+
+        SAVED_CARDS = 5
+        SAVED_CARD_COUNT = 6
+        CLEAR_SAVED_CARD = 7
+
+        ACCESS = 8
+        ACCESS_CARD = 9
+        ACCESS_VALID = 10
+        ACCESS_TIME = 11
 
     class Status(NamedTuple):
         lock: bool
@@ -187,11 +188,11 @@ class Handle(Sensor):
             match self.Id(ch.id):
                 case self.Id.STATUS_LOCKER:
                     lock = ch.data == 0x00FF
-                case self.Id.CARD_UID:
+                case self.Id.ACCESS_CARD:
                     (card_uid,) = ch.data
                 case self.Id.ACCESS_TIME:
                     (time,) = ch.data
-                case self.Id.ACCESS_IS_VALID:
+                case self.Id.ACCESS_VALID:
                     is_valid = ch.data == 0x00FF
         self.status = self.Status(lock, Access(card_uid, time, is_valid))
 
@@ -200,16 +201,16 @@ class Handle(Sensor):
         access_mask = 0
         for ch in chunks:
             match self.Id(ch.id):
-                case self.Id.CARD_UID:
+                case self.Id.ACCESS_CARD:
                     (card_uid,) = ch.data
                     access_mask |= 0b001
                 case self.Id.ACCESS_TIME:
                     (time,) = ch.data
                     access_mask |= 0b010
-                case self.Id.ACCESS_IS_VALID:
+                case self.Id.ACCESS_VALID:
                     is_valid = ch.data[0] == 0x00FF
                     access_mask |= 0b100
-                case self.Id.CARD_UID_ARR_READ:
+                case self.Id.SAVED_CARD_COUNT:
                     cards = ch.data
                     log.sensor("saved cards:")
                     if cards == 0:
@@ -229,7 +230,7 @@ class Handle(Sensor):
 
     def request_access(self, offset: int, count: int) -> None:
         chunk = Chunk(
-            self.Id.ACCESS_COUNT.value, DataType.CARD_RANGE, 2, (offset, count)
+            self.Id.ACCESS.value, DataType.CARD_RANGE, 2, (offset, count)
         )
         resp = comm.request(self.uid, comm.Func.REQ_READ_DATA, chunk)
         if resp:
@@ -238,7 +239,7 @@ class Handle(Sensor):
 
     def request_saved_cards(self, offset: int, count: int) -> None:
         chunk = Chunk(
-            self.Id.CARD_RANGE.value,
+            self.Id.SAVED_CARDS.value,
             DataType.CARD_RANGE,
             2,
             (offset, count),
